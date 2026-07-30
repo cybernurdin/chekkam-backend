@@ -76,6 +76,14 @@ export const riskCopy = {
     en: "No high-risk keywords detected, but this has not been reviewed by a person yet.",
     fr: "Aucun mot-clé à haut risque détecté, mais une personne ne l'a pas encore revu.",
   },
+  claimedTimeInFuture: {
+    en: "Claims a mobile-money transaction happened at a time that hasn't occurred yet — a common sign of a faked payment message.",
+    fr: "Prétend qu'une transaction Mobile Money a eu lieu à une heure qui n'est pas encore arrivée — signe fréquent d'un faux message de paiement.",
+  },
+  claimedTimeStale: {
+    en: "The claimed transaction time is much earlier than now, which can mean an old payment message is being reused.",
+    fr: "L'heure de transaction indiquée est bien antérieure à maintenant, ce qui peut signifier qu'un ancien message de paiement est réutilisé.",
+  },
   recommendedAction: {
     en: "Do not send money or share personal information until this has been verified.",
     fr: "N'envoyez pas d'argent et ne partagez pas d'informations personnelles avant vérification.",

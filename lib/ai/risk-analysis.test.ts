@@ -39,6 +39,59 @@ describe("ruleBasedFallback", () => {
   });
 });
 
+describe("ruleBasedFallback — claimed mobile-money transaction time", () => {
+  // A classic Cameroon momo scam: the scammer shows a fake/reused "payment
+  // sent" SMS so the victim hands over goods before checking their real
+  // balance. The message always carries a bare clock time, never a date.
+  const now = new Date("2026-03-10T14:00:00.000Z");
+
+  it("flags a claimed transaction time that hasn't happened yet", () => {
+    const result = ruleBasedFallback(
+      "You have received 25,000 XAF mobile money transfer at 23:45. Thank you.",
+      "en",
+      now
+    );
+    expect(result.indicators.claimed_transaction_time_mismatch).toBe("future");
+    expect(result.reasons.some((r) => /hasn't occurred yet/i.test(r))).toBe(true);
+  });
+
+  it("flags a claimed transaction time hours in the past as a possibly-reused message", () => {
+    const result = ruleBasedFallback(
+      "You have received 25,000 XAF mobile money transfer at 08:00. Thank you.",
+      "en",
+      now
+    );
+    expect(result.indicators.claimed_transaction_time_mismatch).toBe("stale");
+    expect(result.reasons.some((r) => /much earlier than now/i.test(r))).toBe(true);
+  });
+
+  it("does not flag a claimed time within a normal recent window", () => {
+    const result = ruleBasedFallback(
+      "You have received 25,000 XAF mobile money transfer at 13:55. Thank you.",
+      "en",
+      now
+    );
+    expect(result.indicators.claimed_transaction_time_mismatch).toBe("none");
+  });
+
+  it("treats a late-night time seen shortly after midnight as yesterday, not ~24h in the future", () => {
+    const justAfterMidnight = new Date("2026-03-10T00:10:00.000Z");
+    const result = ruleBasedFallback(
+      "You have received 25,000 XAF mobile money transfer at 23:55. Thank you.",
+      "en",
+      justAfterMidnight
+    );
+    // 23:55 "today" would be ~23h45 in the future; the plausible reading is
+    // 23:55 yesterday — 15 minutes ago, not a future or a stale claim.
+    expect(result.indicators.claimed_transaction_time_mismatch).toBe("none");
+  });
+
+  it("does not run the time check at all when the message doesn't mention payment", () => {
+    const result = ruleBasedFallback("Meeting moved to 23:45 tomorrow, see you then.", "en", now);
+    expect(result.indicators.claimed_transaction_time_mismatch).toBe("none");
+  });
+});
+
 describe("analyzeContent (no OPENAI_API_KEY)", () => {
   beforeEach(() => {
     logAiPrediction.mockClear();

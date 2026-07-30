@@ -28,6 +28,10 @@ export const riskAnalysisSchema = z.object({
     requests_personal_info: z.boolean(),
     impersonates_institution: z.string().nullable(),
     contains_suspicious_link: z.boolean(),
+    /** Set by the rule-based/local-model tiers only (a shared-SMS claimed
+     * mobile-money transaction time compared against now — see
+     * detectTransactionTimeMismatch). The AI tier doesn't populate this. */
+    claimed_transaction_time_mismatch: z.enum(["none", "future", "stale"]).optional(),
   }),
   recommended_action: z.string(),
   confidence: z.enum(["low", "medium", "high"]),
@@ -180,6 +184,52 @@ const LINK_PATTERN = /https?:\/\/\S+|www\.\S+/i;
 const INSTITUTION_PATTERN =
   /(minpostel|ministry|ministère|government|gouvernement|police|gendarmerie|customs|douanes|waec|gce board)/i;
 
+// Matches a bare clock time as it appears in a shared mobile-money SMS
+// ("...received at 14:32", "sent 2:32pm", "14h32") — no date, since these
+// messages/screenshots never include one.
+const TRANSACTION_TIME_PATTERN = /\b([01]?\d|2[0-3])[:h]([0-5]\d)\s*(am|pm)?\b/i;
+const TRANSACTION_TIME_FUTURE_TOLERANCE_MS = 5 * 60 * 1000; // clock-skew grace window
+const TRANSACTION_TIME_STALE_THRESHOLD_MS = 3 * 60 * 60 * 1000; // 3 hours
+
+/**
+ * A classic Cameroon mobile-money scam: the scammer shows the victim a fake
+ * or reused "payment sent" SMS/screenshot claiming money already arrived, so
+ * the victim hands over goods/change before checking their own balance. The
+ * message always carries a clock time but never a date, so this compares
+ * that claimed time against now — a transaction claimed to have happened in
+ * the future is impossible outright; one claimed hours ago being presented
+ * as urgent/just-happened suggests an old message is being replayed.
+ *
+ * A bare time has no date, so "23:50" seen at "00:10" almost certainly means
+ * yesterday, not 23h50 from now — if the naive same-day reading would be
+ * more than 12h in the future, the more plausible reading is "yesterday."
+ */
+function detectTransactionTimeMismatch(
+  content: string,
+  now: Date
+): { status: "future" | "stale" | "none"; claimedTime: Date | null } {
+  const match = content.match(TRANSACTION_TIME_PATTERN);
+  if (!match) return { status: "none", claimedTime: null };
+
+  let hour = parseInt(match[1], 10);
+  const minute = parseInt(match[2], 10);
+  const meridiem = match[3]?.toLowerCase();
+  if (meridiem === "pm" && hour < 12) hour += 12;
+  if (meridiem === "am" && hour === 12) hour = 0;
+  if (hour > 23) return { status: "none", claimedTime: null };
+
+  const claimed = new Date(now);
+  claimed.setHours(hour, minute, 0, 0);
+  if (claimed.getTime() - now.getTime() > 12 * 60 * 60 * 1000) {
+    claimed.setDate(claimed.getDate() - 1);
+  }
+
+  const diffMs = claimed.getTime() - now.getTime();
+  if (diffMs > TRANSACTION_TIME_FUTURE_TOLERANCE_MS) return { status: "future", claimedTime: claimed };
+  if (-diffMs > TRANSACTION_TIME_STALE_THRESHOLD_MS) return { status: "stale", claimedTime: claimed };
+  return { status: "none", claimedTime: claimed };
+}
+
 /** Returns the first matching word's original-case substring as it appears in `content`, if any. */
 function findOriginalCaseMatch(content: string, words: string[]): string | null {
   const lower = content.toLowerCase();
@@ -194,8 +244,10 @@ function findOriginalCaseMatch(content: string, words: string[]): string | null 
  * The two non-AI tiers, in order: the local model when it can load and
  * predict, the pure-keyword rule-based check otherwise. Never throws.
  */
-function fallback(content: string, preferredLanguage: Lang): RiskAnalysisResult {
-  return localModelFallback(content, preferredLanguage) ?? ruleBasedFallback(content, preferredLanguage);
+function fallback(content: string, preferredLanguage: Lang, now: Date = new Date()): RiskAnalysisResult {
+  return (
+    localModelFallback(content, preferredLanguage, now) ?? ruleBasedFallback(content, preferredLanguage, now)
+  );
 }
 
 /**
@@ -203,16 +255,21 @@ function fallback(content: string, preferredLanguage: Lang): RiskAnalysisResult 
  * (rule-based and local-model) — one implementation of "what counts as a
  * suspicious signal," never two.
  */
-function detectIndicators(content: string, preferredLanguage: Lang) {
+function detectIndicators(content: string, preferredLanguage: Lang, now: Date = new Date()) {
   const lower = content.toLowerCase();
   const hasUrgency = URGENCY_WORDS.some((w) => lower.includes(w));
   const requestsPayment = PAYMENT_WORDS.some((w) => lower.includes(w));
   const requestsPersonalInfo = PERSONAL_INFO_WORDS.some((w) => lower.includes(w));
   const hasLink = LINK_PATTERN.test(content);
   const institutionMatch = content.match(INSTITUTION_PATTERN)?.[0] ?? null;
-  const signalCount = [hasUrgency, requestsPayment, requestsPersonalInfo, hasLink].filter(
-    Boolean
-  ).length;
+  const timeMismatch = requestsPayment ? detectTransactionTimeMismatch(content, now) : { status: "none" as const, claimedTime: null };
+  const signalCount = [
+    hasUrgency,
+    requestsPayment,
+    requestsPersonalInfo,
+    hasLink,
+    timeMismatch.status !== "none",
+  ].filter(Boolean).length;
 
   const reasons: string[] = [];
   const suspiciousPhrases: string[] = [];
@@ -236,6 +293,11 @@ function detectIndicators(content: string, preferredLanguage: Lang) {
     const match = content.match(LINK_PATTERN)?.[0];
     if (match) suspiciousPhrases.push(match);
   }
+  if (timeMismatch.status === "future") {
+    reasons.push(trRisk("claimedTimeInFuture", preferredLanguage));
+  } else if (timeMismatch.status === "stale") {
+    reasons.push(trRisk("claimedTimeStale", preferredLanguage));
+  }
   if (institutionMatch) suspiciousPhrases.push(institutionMatch);
   if (reasons.length === 0) {
     reasons.push(trRisk("noHighRisk", preferredLanguage));
@@ -252,6 +314,7 @@ function detectIndicators(content: string, preferredLanguage: Lang) {
       requests_personal_info: requestsPersonalInfo,
       impersonates_institution: institutionMatch,
       contains_suspicious_link: hasLink,
+      claimed_transaction_time_mismatch: timeMismatch.status,
     },
   } as const;
 }
@@ -264,11 +327,13 @@ function detectIndicators(content: string, preferredLanguage: Lang) {
  */
 export function ruleBasedFallback(
   content: string,
-  preferredLanguage: Lang = "en"
+  preferredLanguage: Lang = "en",
+  now: Date = new Date()
 ): RiskAnalysisResult {
   const { signalCount, reasons, suspiciousPhrases, category, indicators } = detectIndicators(
     content,
-    preferredLanguage
+    preferredLanguage,
+    now
   );
 
   return {
@@ -300,14 +365,16 @@ export function ruleBasedFallback(
  */
 export function localModelFallback(
   content: string,
-  preferredLanguage: Lang = "en"
+  preferredLanguage: Lang = "en",
+  now: Date = new Date()
 ): RiskAnalysisResult | null {
   const prediction = predictLocalRiskLevel(content);
   if (!prediction) return null;
 
   const { reasons, suspiciousPhrases, category, indicators } = detectIndicators(
     content,
-    preferredLanguage
+    preferredLanguage,
+    now
   );
   const scoreByLevel = { low: 20, medium: 55, high: 80 } as const;
 
