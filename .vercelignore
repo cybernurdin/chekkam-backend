@@ -1,0 +1,6 @@
+.env
+.env.*
+*.tsbuildinfo
+coverage
+data/external
+data/inbox

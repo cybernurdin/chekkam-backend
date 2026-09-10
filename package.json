@@ -3,12 +3,13 @@
   "version": "0.1.0",
   "private": true,
   "engines": {
-    "node": ">=22"
+    "node": "24.x"
   },
   "scripts": {
     "dev": "next dev",
     "build": "next build",
-    "start": "npm run db:migrate && npm run db:seed && next start",
+    "start": "next start",
+    "check:deployment": "node scripts/check-deployment.mjs",
     "db:migrate": "node scripts/migrate.mjs",
     "db:seed": "tsx scripts/seed.ts",
     "seed:demo-trust": "tsx scripts/seed-demo-trust.ts",
