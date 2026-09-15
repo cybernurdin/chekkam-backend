@@ -4,6 +4,7 @@ import { useState } from "react";
 import Link from "next/link";
 import { LanguageToggle } from "@/components/language-toggle";
 import { useI18n } from "@/components/i18n-provider";
+import { MediaClaimCheckForm } from "@/components/media-claim-check-form";
 
 type ReportResult = {
   id: string;
@@ -25,6 +26,7 @@ const RISK_CLASS: Record<string, string> = {
 
 export default function CheckPage() {
   const { lang, t } = useI18n();
+  const [checkMode, setCheckMode] = useState<"message" | "media">("message");
   const [contentType, setContentType] = useState<"text" | "link">("text");
   const [content, setContent] = useState("");
   const [result, setResult] = useState<ReportResult | null>(null);
@@ -90,6 +92,29 @@ export default function CheckPage() {
       </h1>
       <p className="mt-2 text-sm text-chekkam-muted">{t("checkIntro")}</p>
 
+      <div className="mt-6 flex gap-2">
+        {(["message", "media"] as const).map((mode) => (
+          <button
+            key={mode}
+            type="button"
+            onClick={() => setCheckMode(mode)}
+            className={`rounded-[var(--radius-chekkam-sm)] px-4 py-1.5 text-sm font-medium transition ${
+              checkMode === mode
+                ? "bg-chekkam-ink text-white"
+                : "bg-chekkam-tint text-chekkam-muted hover:bg-chekkam-border"
+            }`}
+          >
+            {mode === "message" ? t("checkModeMessage") : t("checkModeMedia")}
+          </button>
+        ))}
+      </div>
+
+      {checkMode === "media" ? (
+        <div className="mt-6">
+          <MediaClaimCheckForm />
+        </div>
+      ) : (
+        <>
       <form onSubmit={handleSubmit} className="mt-6 flex flex-col gap-4">
         <div className="flex gap-2">
           {(["text", "link"] as const).map((type) => (
@@ -155,6 +180,8 @@ export default function CheckPage() {
             <p className="text-sm text-chekkam-muted">{t("automatedFirstLook")}</p>
           </div>
         </div>
+      )}
+        </>
       )}
 
       <div className="mt-10 flex gap-4 text-sm">
