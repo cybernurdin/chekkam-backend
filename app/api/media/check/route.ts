@@ -10,7 +10,9 @@ import { analyzeImageAuthenticity, analyzeAudioAuthenticity, analyzeVideoAuthent
 import { verifyMediaSource } from "@/lib/media/source-verification";
 import { inspectContentCredentials } from "@/lib/media/content-credentials";
 
-const MAX_FILE_BYTES = 25 * 1024 * 1024;
+// Vercel Functions reject bodies larger than 4.5MB. Keep multipart headroom;
+// a future direct-to-storage flow handles larger original media safely.
+const MAX_FILE_BYTES = 4 * 1024 * 1024;
 const RATE_LIMIT = 15;
 const RATE_WINDOW_SECONDS = 10 * 60;
 
@@ -116,7 +118,7 @@ export async function POST(req: NextRequest) {
       throw new ValidationError("file is required (multipart/form-data).", "file");
     }
     if (file.size > MAX_FILE_BYTES) {
-      throw new ValidationError("File exceeds the 25MB media-check limit.", "file");
+      throw new ValidationError("File exceeds the 4MB inline media-check limit. Send a shorter clip or use direct upload when available.", "file");
     }
 
     const sourceUrl = form.get("source_url");
